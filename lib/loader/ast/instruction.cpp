@@ -12,23 +12,124 @@ namespace Loader {
 
 // OpCode loader. See "include/loader/loader.h".
 Expect<OpCode> Loader::loadOpCode() {
-  uint16_t Payload;
+  uint8_t Prefix;
   if (auto B1 = FMgr.readByte()) {
-    Payload = (*B1);
+    Prefix = (*B1);
   } else {
     return Unexpect(B1);
   }
 
-  if (Payload == 0xFCU || Payload == 0xFDU || Payload == 0xFEU) {
-    // 2-bytes OpCode case.
+  if (Prefix >= 0xFBU && Prefix <= 0xFEU) {
+    // Multi-byte OpCode case.
+    uint32_t Extend;
     if (auto B2 = FMgr.readU32()) {
-      Payload <<= 8;
-      Payload += static_cast<uint16_t>(*B2);
+      Extend = (*B2);
     } else {
       return Unexpect(B2);
     }
+    if (Prefix == 0xFBU) {
+      switch (Extend) {
+#define UseOpCode
+#define Line(NAME, STRING, PREFIX)
+#define Line_FB(NAME, STRING, PREFIX, EXTEND)                                  \
+  case EXTEND:                                                                 \
+    return OpCode::NAME;
+#define Line_FC(NAME, STRING, PREFIX, EXTEND)
+#define Line_FD(NAME, STRING, PREFIX, EXTEND)
+#define Line_FE(NAME, STRING, PREFIX, EXTEND)
+#include "common/enum.inc"
+#undef Line
+#undef Line_FB
+#undef Line_FC
+#undef Line_FD
+#undef Line_FE
+#undef UseOpCode
+      default:
+        return Unexpect(ErrCode::Value::IllegalOpCode);
+      }
+    } else if (Prefix == 0xFCU) {
+      switch (Extend) {
+#define UseOpCode
+#define Line(NAME, STRING, PREFIX)
+#define Line_FB(NAME, STRING, PREFIX, EXTEND)
+#define Line_FC(NAME, STRING, PREFIX, EXTEND)                                  \
+  case EXTEND:                                                                 \
+    return OpCode::NAME;
+#define Line_FD(NAME, STRING, PREFIX, EXTEND)
+#define Line_FE(NAME, STRING, PREFIX, EXTEND)
+#include "common/enum.inc"
+#undef Line
+#undef Line_FB
+#undef Line_FC
+#undef Line_FD
+#undef Line_FE
+#undef UseOpCode
+      default:
+        return Unexpect(ErrCode::Value::IllegalOpCode);
+      }
+    } else if (Prefix == 0xFDU) {
+      switch (Extend) {
+#define UseOpCode
+#define Line(NAME, STRING, PREFIX)
+#define Line_FB(NAME, STRING, PREFIX, EXTEND)
+#define Line_FC(NAME, STRING, PREFIX, EXTEND)
+#define Line_FD(NAME, STRING, PREFIX, EXTEND)                                  \
+  case EXTEND:                                                                 \
+    return OpCode::NAME;
+#define Line_FE(NAME, STRING, PREFIX, EXTEND)
+#include "common/enum.inc"
+#undef Line
+#undef Line_FB
+#undef Line_FC
+#undef Line_FD
+#undef Line_FE
+#undef UseOpCode
+      default:
+        return Unexpect(ErrCode::Value::IllegalOpCode);
+      }
+    } else {
+      switch (Extend) {
+#define UseOpCode
+#define Line(NAME, STRING, PREFIX)
+#define Line_FB(NAME, STRING, PREFIX, EXTEND)
+#define Line_FC(NAME, STRING, PREFIX, EXTEND)
+#define Line_FD(NAME, STRING, PREFIX, EXTEND)
+#define Line_FE(NAME, STRING, PREFIX, EXTEND)                                  \
+  case EXTEND:                                                                 \
+    return OpCode::NAME;
+#include "common/enum.inc"
+#undef Line
+#undef Line_FB
+#undef Line_FC
+#undef Line_FD
+#undef Line_FE
+#undef UseOpCode
+      default:
+        return Unexpect(ErrCode::Value::IllegalOpCode);
+      }
+    }
+  } else {
+    // Single-byte OpCode case.
+    switch (Prefix) {
+#define UseOpCode
+#define Line(NAME, STRING, PREFIX)                                             \
+  case PREFIX:                                                                 \
+    return OpCode::NAME;
+#define Line_FB(NAME, STRING, PREFIX, EXTEND)
+#define Line_FC(NAME, STRING, PREFIX, EXTEND)
+#define Line_FD(NAME, STRING, PREFIX, EXTEND)
+#define Line_FE(NAME, STRING, PREFIX, EXTEND)
+#include "common/enum.inc"
+#undef Line
+#undef Line_FB
+#undef Line_FC
+#undef Line_FD
+#undef Line_FE
+#undef UseOpCode
+    default:
+      return Unexpect(ErrCode::Value::IllegalOpCode);
+    }
   }
-  return static_cast<OpCode>(Payload);
 }
 
 // Load instruction sequence. See "include/loader/loader.h".
@@ -50,53 +151,63 @@ Expect<AST::InstrVec> Loader::loadInstrSeq(std::optional<uint64_t> SizeBound) {
     }
 
     // Check with proposals.
-    if (auto Res = checkInstrProposals(Code, Offset); !Res) {
-      return Unexpect(Res);
+    if (auto Res = Conf.isInstrNeedProposal(Code); unlikely(Res.has_value())) {
+      return logNeedProposal(ErrCode::Value::IllegalOpCode, Res.value(), Offset,
+                             ASTNodeAttr::Instruction);
     }
 
-    // Process the instructions which contain a block.
-    if (Code == OpCode::Block || Code == OpCode::Loop || Code == OpCode::If) {
-      BlockStack.push_back(std::make_pair(Code, Cnt));
-    } else if (Code == OpCode::Else) {
+    auto logIllegalOpCode = [this, &Offset,
+                             &SizeBound]() -> Unexpected<ErrCode> {
+      if (SizeBound.has_value() && FMgr.getOffset() > SizeBound.value()) {
+        return logLoadError(ErrCode::Value::ENDCodeExpected, Offset,
+                            ASTNodeAttr::Instruction);
+      } else {
+        return logLoadError(ErrCode::Value::IllegalOpCode, Offset,
+                            ASTNodeAttr::Instruction);
+      }
+    };
+
+    // Process the instruction which contains a block.
+    switch (Code) {
+    case OpCode::Block:
+    case OpCode::Loop:
+    case OpCode::If:
+    // LEGACY-EH: remove the `Try` after deprecating legacy EH.
+    case OpCode::Try:
+    case OpCode::Try_table:
+      BlockStack.emplace_back(Code, Cnt);
+      break;
+    case OpCode::Else: {
       if (BlockStack.size() == 0 || BlockStack.back().first != OpCode::If) {
         // An Else instruction appeared outside the If-block.
-        if (SizeBound.has_value() && FMgr.getOffset() > SizeBound.value()) {
-          return logLoadError(ErrCode::Value::ENDCodeExpected, Offset,
-                              ASTNodeAttr::Instruction);
-        } else {
-          return logLoadError(ErrCode::Value::IllegalOpCode, Offset,
-                              ASTNodeAttr::Instruction);
-        }
+        return logIllegalOpCode();
       }
       uint32_t Pos = BlockStack.back().second;
       if (Instrs[Pos].getJumpElse() > 0) {
         // An Else instruction appeared before in this If-block.
-        if (SizeBound.has_value() && FMgr.getOffset() > SizeBound.value()) {
-          return logLoadError(ErrCode::Value::ENDCodeExpected, Offset,
-                              ASTNodeAttr::Instruction);
-        } else {
-          return logLoadError(ErrCode::Value::IllegalOpCode, Offset,
-                              ASTNodeAttr::Instruction);
-        }
+        return logIllegalOpCode();
       }
       Instrs[Pos].setJumpElse(Cnt - Pos);
-    } else if (Code == OpCode::End) {
-      if (BlockStack.size() > 0) {
-        uint32_t Pos = BlockStack.back().second;
-        Instrs[Pos].setJumpEnd(Cnt - Pos);
-        if (BlockStack.back().first == OpCode::If) {
-          if (Instrs[Pos].getJumpElse() == 0) {
-            // If block without else. Set the else jump the same as end jump.
-            Instrs[Pos].setJumpElse(Cnt - Pos);
-          } else {
-            const uint32_t ElsePos = Pos + Instrs[Pos].getJumpElse();
-            Instrs[ElsePos].setJumpEnd(Cnt - ElsePos);
-          }
-        }
-        BlockStack.pop_back();
-      } else {
-        IsReachEnd = true;
+      break;
+    }
+    // LEGACY-EH: remove the `Catch` cases after deprecating legacy EH.
+    case OpCode::Catch:
+    case OpCode::Catch_all: {
+      if (BlockStack.size() == 0 || BlockStack.back().first != OpCode::Try) {
+        // A Catch/Catch_all instruction appeared outside a try-block.
+        return logIllegalOpCode();
       }
+      auto Pos = BlockStack.back().second;
+      auto &CatchClause = Instrs[Pos].getTryCatch().Catch;
+      if (CatchClause.size() > 0 && CatchClause.back().IsAll) {
+        // A Catch shouldn't behind a Catch_all in the same block.
+        // And also a try block may contain only one Catch_all instruction.
+        return logIllegalOpCode();
+      }
+      break;
+    }
+    default:
+      break;
     }
 
     // Create the instruction node and load contents.
@@ -104,12 +215,56 @@ Expect<AST::InstrVec> Loader::loadInstrSeq(std::optional<uint64_t> SizeBound) {
     if (auto Res = loadInstruction(Instrs.back()); !Res) {
       return Unexpect(Res);
     }
+
     if (Code == OpCode::End) {
-      if (IsReachEnd) {
-        Instrs.back().setLast(true);
+      // Post process the End instruction.
+      if (BlockStack.size() > 0) {
+        Instrs.back().setExprLast(false);
+        const auto &[BackOp, Pos] = BlockStack.back();
+        if (BackOp == OpCode::Block || BackOp == OpCode::Loop ||
+            BackOp == OpCode::If) {
+          Instrs.back().setTryBlockLast(false);
+          // LEGACY-EH: remove this after deprecating legacy EH.
+          Instrs.back().setLegacyTryBlockLast(false);
+          Instrs[Pos].setJumpEnd(Cnt - Pos);
+          if (BackOp == OpCode::If) {
+            if (Instrs[Pos].getJumpElse() == 0) {
+              // If block without else. Set the else jump the same as end jump.
+              Instrs[Pos].setJumpElse(Cnt - Pos);
+            } else {
+              const uint32_t ElsePos = Pos + Instrs[Pos].getJumpElse();
+              Instrs[ElsePos].setJumpEnd(Cnt - ElsePos);
+            }
+          }
+        } else if (BackOp == OpCode::Try_table) {
+          Instrs.back().setTryBlockLast(true);
+          // LEGACY-EH: remove this after deprecating legacy EH.
+          Instrs.back().setLegacyTryBlockLast(false);
+          Instrs[Pos].getTryCatch().JumpEnd = Cnt - Pos;
+        } else if (BackOp == OpCode::Try) {
+          // LEGACY-EH: remove the `Try` case after deprecating legacy EH.
+          Instrs.back().setTryBlockLast(false);
+          Instrs.back().setLegacyTryBlockLast(true);
+          Instrs[Pos].getTryCatch().JumpEnd = Cnt - Pos;
+        }
+        BlockStack.pop_back();
       } else {
-        Instrs.back().setLast(false);
+        Instrs.back().setExprLast(true);
+        IsReachEnd = true;
       }
+    } else if (Code == OpCode::Catch || Code == OpCode::Catch_all) {
+      // LEGACY-EH: remove these cases after deprecating legacy EH.
+      uint32_t Pos = BlockStack.back().second;
+      auto &CatchClause = Instrs[Pos].getTryCatch().Catch;
+      auto &CatchDesc = Instrs.back().getCatchLegacy();
+      CatchDesc.CatchPCOffset = Cnt - Pos;
+      CatchDesc.CatchIndex = static_cast<uint32_t>(CatchClause.size());
+      CatchClause.push_back({true,
+                             Code == OpCode::Catch_all,
+                             false,
+                             Code == OpCode::Catch ? CatchDesc.TagIndex : 0,
+                             0,
+                             {0, 0, 0, 0}});
     }
     Cnt++;
   } while (!IsReachEnd);
@@ -184,34 +339,25 @@ Expect<void> Loader::loadInstruction(AST::Instruction &Instr) {
     return {};
   };
 
-  switch (Instr.getOpCode()) {
-  // Control instructions.
-  case OpCode::Unreachable:
-  case OpCode::Nop:
-  case OpCode::Return:
-  case OpCode::End:
-  case OpCode::Else:
-    return {};
-
-  case OpCode::Block:
-  case OpCode::Loop:
-  case OpCode::If:
+  auto readBlockType = [this](BlockType &Dst) -> Expect<void> {
+    auto StartOffset = FMgr.getOffset();
     // Read the block return type.
     if (auto Res = FMgr.readS33()) {
       if (*Res < 0) {
-        // Value type case.
-        // TODO: may check whether the `TypeByte` exceed the range.
-        Byte TypeByte = static_cast<Byte>((*Res) & INT64_C(0x7F));
-        if (TypeByte == 0x40) {
-          Instr.setEmptyBlockType();
+        TypeCode TypeByte = static_cast<TypeCode>((*Res) & INT64_C(0x7F));
+        if (TypeByte == TypeCode::Epsilon) {
+          // Empty case.
+          Dst.setEmpty();
         } else {
-          ValType VType = static_cast<ValType>(TypeByte);
-          if (auto Check = checkValTypeProposals(VType, FMgr.getLastOffset(),
-                                                 ASTNodeAttr::Instruction);
-              unlikely(!Check)) {
-            return Unexpect(Check);
+          // Value type case. Seek back to the origin offset and read the
+          // valtype.
+          FMgr.seek(StartOffset);
+          if (auto TypeRes = loadValType(ASTNodeAttr::Instruction)) {
+            Dst.setData(*TypeRes);
+          } else {
+            // The AST node information is handled.
+            return Unexpect(TypeRes);
           }
-          Instr.setBlockType(VType);
         }
       } else {
         // Type index case.
@@ -220,27 +366,110 @@ Expect<void> Loader::loadInstruction(AST::Instruction &Instr) {
                                  Proposal::MultiValue, FMgr.getLastOffset(),
                                  ASTNodeAttr::Instruction);
         }
-        Instr.setBlockType(static_cast<uint32_t>(*Res));
+        Dst.setData(static_cast<uint32_t>(*Res));
       }
     } else {
       return logLoadError(Res.error(), FMgr.getLastOffset(),
                           ASTNodeAttr::Instruction);
     }
     return {};
+  };
+
+  switch (Instr.getOpCode()) {
+  // Control instructions.
+  case OpCode::Unreachable:
+  case OpCode::Nop:
+  case OpCode::Return:
+  case OpCode::Throw_ref:
+  case OpCode::End:
+  case OpCode::Else:
+  // LEGACY-EH: remove the `Catch_all` case after deprecating legacy EH.
+  case OpCode::Catch_all:
+    return {};
+
+  case OpCode::Block:
+  case OpCode::Loop:
+  case OpCode::If:
+    return readBlockType(Instr.getBlockType());
+
+  case OpCode::Try_table: {
+    Instr.setTryCatch();
+    // Read the result type.
+    if (auto Res = readBlockType(Instr.getTryCatch().ResType); !Res) {
+      return Unexpect(Res);
+    }
+    uint32_t VecCnt = 0;
+    // Read the vector of catch.
+    if (auto Res = loadVecCnt()) {
+      VecCnt = *Res;
+    } else {
+      return logLoadError(Res.error(), FMgr.getLastOffset(),
+                          ASTNodeAttr::Instruction);
+    }
+    Instr.getTryCatch().Catch.resize(VecCnt);
+    for (uint32_t I = 0; I < VecCnt; ++I) {
+      auto &Desc = Instr.getTryCatch().Catch[I];
+      // Read the catch flag.
+      if (auto Res = FMgr.readByte()) {
+        // LEGACY-EH: remove this flag after deprecating legacy EH.
+        Desc.IsLegacy = false;
+        Desc.IsRef = (*Res & 0x01U) ? true : false;
+        Desc.IsAll = (*Res & 0x02U) ? true : false;
+      } else {
+        return logLoadError(Res.error(), FMgr.getLastOffset(),
+                            ASTNodeAttr::Instruction);
+      }
+      if (!Desc.IsAll) {
+        // Read the tag index.
+        if (auto Res = readU32(Desc.TagIndex); !Res) {
+          return Unexpect(Res);
+        }
+      }
+      // Read the label index.
+      if (auto Res = readU32(Desc.LabelIndex); !Res) {
+        return Unexpect(Res);
+      }
+    }
+    return {};
+  }
+
+  // LEGACY-EH: remove the `Try` case after deprecating legacy EH.
+  case OpCode::Try:
+    Instr.setTryCatch();
+    return readBlockType(Instr.getTryCatch().ResType);
+
+  // LEGACY-EH: remove the `Catch` case after deprecating legacy EH.
+  case OpCode::Catch:
+    return readU32(Instr.getCatchLegacy().TagIndex);
+
+  case OpCode::Throw:
+    return readU32(Instr.getTargetIndex());
+
+  // LEGACY-EH: remove the `Rethrow` case after deprecating legacy EH.
+  case OpCode::Rethrow:
+    spdlog::error(ErrCode::Value::IllegalOpCode);
+    spdlog::error("    Deprecated `rethrow` instruction.");
+    return Unexpect(ErrCode::Value::IllegalOpCode);
 
   case OpCode::Br:
   case OpCode::Br_if:
+  case OpCode::Br_on_null:
+  case OpCode::Br_on_non_null:
     return readU32(Instr.getJump().TargetIndex);
+
+  // LEGACY-EH: remove the `Delegate` case after deprecating legacy EH.
+  case OpCode::Delegate:
+    spdlog::error(ErrCode::Value::IllegalOpCode);
+    spdlog::error("    Deprecated `delegate` instruction.");
+    return Unexpect(ErrCode::Value::IllegalOpCode);
 
   case OpCode::Br_table: {
     uint32_t VecCnt = 0;
     // Read the vector of labels.
-    if (auto Res = readU32(VecCnt); unlikely(!Res)) {
-      return Unexpect(Res);
-    }
-    if (VecCnt / 2 > FMgr.getRemainSize()) {
-      // Too many label for Br_table.
-      return logLoadError(ErrCode::Value::IntegerTooLong, FMgr.getLastOffset(),
+    if (auto Res = loadVecCnt()) {
+      VecCnt = *Res;
+    } else {
+      return logLoadError(Res.error(), FMgr.getLastOffset(),
                           ASTNodeAttr::Instruction);
     }
     Instr.setLabelListSize(VecCnt + 1);
@@ -256,6 +485,8 @@ Expect<void> Loader::loadInstruction(AST::Instruction &Instr) {
 
   case OpCode::Call:
   case OpCode::Return_call:
+  case OpCode::Call_ref:
+  case OpCode::Return_call_ref:
     return readU32(Instr.getTargetIndex());
 
   case OpCode::Call_indirect:
@@ -280,23 +511,94 @@ Expect<void> Loader::loadInstruction(AST::Instruction &Instr) {
 
   // Reference Instructions.
   case OpCode::Ref__null:
-    if (auto Res = FMgr.readByte(); unlikely(!Res)) {
-      return logLoadError(Res.error(), FMgr.getLastOffset(),
-                          ASTNodeAttr::Instruction);
+  case OpCode::Ref__test_null:
+  case OpCode::Ref__cast_null:
+    if (auto Res = loadHeapType(TypeCode::RefNull, ASTNodeAttr::Instruction)) {
+      Instr.setValType(*Res);
     } else {
-      Instr.setRefType(static_cast<RefType>(*Res));
-      if (auto Check =
-              checkRefTypeProposals(Instr.getRefType(), FMgr.getLastOffset(),
-                                    ASTNodeAttr::Instruction);
-          unlikely(!Check)) {
-        return Unexpect(Check);
-      }
+      // The AST node information is handled.
+      return Unexpect(Res);
+    }
+    return {};
+  case OpCode::Ref__test:
+  case OpCode::Ref__cast:
+    if (auto Res = loadHeapType(TypeCode::Ref, ASTNodeAttr::Instruction)) {
+      Instr.setValType(*Res);
+    } else {
+      // The AST node information is handled.
+      return Unexpect(Res);
     }
     return {};
   case OpCode::Ref__is_null:
+  case OpCode::Ref__eq:
+  case OpCode::Ref__as_non_null:
     return {};
   case OpCode::Ref__func:
+  case OpCode::Struct__new:
+  case OpCode::Struct__new_default:
+  case OpCode::Array__new:
+  case OpCode::Array__new_default:
+  case OpCode::Array__get:
+  case OpCode::Array__get_s:
+  case OpCode::Array__get_u:
+  case OpCode::Array__set:
+  case OpCode::Array__fill:
     return readU32(Instr.getTargetIndex());
+  case OpCode::Struct__get:
+  case OpCode::Struct__get_s:
+  case OpCode::Struct__get_u:
+  case OpCode::Struct__set:
+  case OpCode::Array__new_fixed:
+  case OpCode::Array__new_data:
+  case OpCode::Array__new_elem:
+  case OpCode::Array__copy:
+  case OpCode::Array__init_data:
+  case OpCode::Array__init_elem:
+    if (auto Res = readU32(Instr.getTargetIndex()); unlikely(!Res)) {
+      return Unexpect(Res);
+    }
+    return readU32(Instr.getSourceIndex());
+  case OpCode::Br_on_cast:
+  case OpCode::Br_on_cast_fail: {
+    // Read the flag.
+    uint8_t Flag = 0U;
+    if (auto Res = readU8(Flag); !Res) {
+      return logLoadError(Res.error(), FMgr.getLastOffset(),
+                          ASTNodeAttr::Instruction);
+    }
+    // Read the label index.
+    uint32_t LabelIdx = 0U;
+    if (auto Res = readU32(LabelIdx); !Res) {
+      return logLoadError(Res.error(), FMgr.getLastOffset(),
+                          ASTNodeAttr::Instruction);
+    }
+    // Read the heap types.
+    Instr.setBrCast(LabelIdx);
+    if (auto Res =
+            loadHeapType(((Flag & 0x01U) ? TypeCode::RefNull : TypeCode::Ref),
+                         ASTNodeAttr::Instruction)) {
+      Instr.getBrCast().RType1 = *Res;
+    } else {
+      return logLoadError(Res.error(), FMgr.getLastOffset(),
+                          ASTNodeAttr::Instruction);
+    }
+    if (auto Res =
+            loadHeapType(((Flag & 0x02U) ? TypeCode::RefNull : TypeCode::Ref),
+                         ASTNodeAttr::Instruction)) {
+      Instr.getBrCast().RType2 = *Res;
+    } else {
+      return logLoadError(Res.error(), FMgr.getLastOffset(),
+                          ASTNodeAttr::Instruction);
+    }
+    return {};
+  }
+  case OpCode::Array__len:
+  case OpCode::Any__convert_extern:
+  case OpCode::Extern__convert_any:
+  case OpCode::Ref__i31:
+  case OpCode::I31__get_s:
+  case OpCode::I31__get_u:
+    return {};
 
   // Parametric Instructions.
   case OpCode::Drop:
@@ -304,29 +606,21 @@ Expect<void> Loader::loadInstruction(AST::Instruction &Instr) {
     return {};
   case OpCode::Select_t: {
     // Read the vector of value types.
-    uint32_t VecCnt;
-    if (auto Res = readU32(VecCnt); unlikely(!Res)) {
-      return Unexpect(Res);
-    }
-    if (VecCnt / 2 > FMgr.getRemainSize()) {
-      return logLoadError(ErrCode::Value::IntegerTooLong, FMgr.getLastOffset(),
+    uint32_t VecCnt = 0;
+    if (auto Res = loadVecCnt()) {
+      VecCnt = *Res;
+    } else {
+      return logLoadError(Res.error(), FMgr.getLastOffset(),
                           ASTNodeAttr::Instruction);
     }
     Instr.setValTypeListSize(VecCnt);
     for (uint32_t I = 0; I < VecCnt; ++I) {
-      ValType VType;
-      if (auto T = FMgr.readByte(); unlikely(!T)) {
-        return logLoadError(T.error(), FMgr.getLastOffset(),
-                            ASTNodeAttr::Instruction);
+      if (auto Res = loadValType(ASTNodeAttr::Instruction)) {
+        Instr.getValTypeList()[I] = *Res;
       } else {
-        VType = static_cast<ValType>(*T);
+        // The AST node information is handled.
+        return Unexpect(Res);
       }
-      if (auto Check = checkValTypeProposals(VType, FMgr.getLastOffset(),
-                                             ASTNodeAttr::Instruction);
-          unlikely(!Check)) {
-        return Unexpect(Check);
-      }
-      Instr.getValTypeList()[I] = VType;
     }
     return {};
   }
@@ -950,72 +1244,8 @@ Expect<void> Loader::loadInstruction(AST::Instruction &Instr) {
     return readMemImmediate();
 
   default:
-    return logLoadError(ErrCode::Value::IllegalOpCode, Instr.getOffset(),
-                        ASTNodeAttr::Instruction);
+    assumingUnreachable();
   }
-}
-
-Expect<void> Loader::checkInstrProposals(OpCode Code,
-                                         uint64_t Offset) const noexcept {
-  if (Code >= OpCode::I32__trunc_sat_f32_s &&
-      Code <= OpCode::I64__trunc_sat_f64_u) {
-    // These instructions are for NonTrapFloatToIntConversions proposal.
-    if (unlikely(!Conf.hasProposal(Proposal::NonTrapFloatToIntConversions))) {
-      return logNeedProposal(ErrCode::Value::IllegalOpCode,
-                             Proposal::NonTrapFloatToIntConversions, Offset,
-                             ASTNodeAttr::Instruction);
-    }
-  } else if (Code >= OpCode::I32__extend8_s &&
-             Code <= OpCode::I64__extend32_s) {
-    // These instructions are for SignExtensionOperators proposal.
-    if (unlikely(!Conf.hasProposal(Proposal::SignExtensionOperators))) {
-      return logNeedProposal(ErrCode::Value::IllegalOpCode,
-                             Proposal::SignExtensionOperators, Offset,
-                             ASTNodeAttr::Instruction);
-    }
-  } else if ((Code >= OpCode::Ref__null && Code <= OpCode::Ref__func) ||
-             (Code >= OpCode::Table__init && Code <= OpCode::Table__copy) ||
-             (Code >= OpCode::Memory__init && Code <= OpCode::Memory__fill)) {
-    // These instructions are for ReferenceTypes or BulkMemoryOperations
-    // proposal.
-    if (unlikely(!Conf.hasProposal(Proposal::ReferenceTypes)) &&
-        unlikely(!Conf.hasProposal(Proposal::BulkMemoryOperations))) {
-      return logNeedProposal(ErrCode::Value::IllegalOpCode,
-                             Proposal::ReferenceTypes, Offset,
-                             ASTNodeAttr::Instruction);
-    }
-  } else if (Code == OpCode::Select_t ||
-             (Code >= OpCode::Table__get && Code <= OpCode::Table__set) ||
-             (Code >= OpCode::Table__grow && Code <= OpCode::Table__fill)) {
-    // These instructions are for ReferenceTypes proposal.
-    if (unlikely(!Conf.hasProposal(Proposal::ReferenceTypes))) {
-      return logNeedProposal(ErrCode::Value::IllegalOpCode,
-                             Proposal::ReferenceTypes, Offset,
-                             ASTNodeAttr::Instruction);
-    }
-  } else if (Code >= OpCode::V128__load &&
-             Code <= OpCode::F64x2__convert_low_i32x4_u) {
-    // These instructions are for SIMD proposal.
-    if (!Conf.hasProposal(Proposal::SIMD)) {
-      return logNeedProposal(ErrCode::Value::IllegalOpCode, Proposal::SIMD,
-                             Offset, ASTNodeAttr::Instruction);
-    }
-  } else if (Code == OpCode::Return_call ||
-             Code == OpCode::Return_call_indirect) {
-    // These instructions are for TailCall proposal.
-    if (!Conf.hasProposal(Proposal::TailCall)) {
-      return logNeedProposal(ErrCode::Value::IllegalOpCode, Proposal::TailCall,
-                             Offset, ASTNodeAttr::Instruction);
-    }
-  } else if (Code >= OpCode::I32__atomic__load &&
-             Code <= OpCode::I64__atomic__rmw32__cmpxchg_u) {
-    // These instructions are for Thread proposal.
-    if (!Conf.hasProposal(Proposal::Threads)) {
-      return logNeedProposal(ErrCode::Value::IllegalOpCode, Proposal::Threads,
-                             Offset, ASTNodeAttr::Instruction);
-    }
-  }
-  return {};
 }
 
 } // namespace Loader

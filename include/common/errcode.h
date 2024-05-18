@@ -16,7 +16,7 @@
 #include "common/enum_errcode.hpp"
 #include "common/expected.h"
 #include "common/hexstr.h"
-#include "common/log.h"
+#include "common/spdlog.h"
 
 #include <cassert>
 #include <ostream>
@@ -65,7 +65,7 @@ struct fmt::formatter<WasmEdge::ErrCode> : fmt::formatter<std::string_view> {
          fmt::format_context &Ctx) const noexcept {
     using namespace std::literals;
     std::string Output =
-        fmt::format("{} failed: {}, Code: 0x{:02x}"sv, Code.getErrCodePhase(),
+        fmt::format("{} failed: {}, Code: 0x{:03x}"sv, Code.getErrCodePhase(),
                     WasmEdge::ErrCodeStr[Code.getEnum()], Code.getCode());
     return formatter<std::string_view>::format(Output, Ctx);
   }

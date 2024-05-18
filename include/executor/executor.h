@@ -220,12 +220,17 @@ private:
                            const AST::CodeSection &CodeSec);
 
   /// Instantiation of Table Instances.
-  Expect<void> instantiate(Runtime::Instance::ModuleInstance &ModInst,
+  Expect<void> instantiate(Runtime::StackManager &StackMgr,
+                           Runtime::Instance::ModuleInstance &ModInst,
                            const AST::TableSection &TabSec);
 
   /// Instantiation of Memory Instances.
   Expect<void> instantiate(Runtime::Instance::ModuleInstance &ModInst,
                            const AST::MemorySection &MemSec);
+
+  /// Instantiateion of Tag Instances.
+  Expect<void> instantiate(Runtime::Instance::ModuleInstance &ModInst,
+                           const AST::TagSection &TagSec);
 
   /// Instantiation of Global Instances.
   Expect<void> instantiate(Runtime::StackManager &StackMgr,
@@ -265,13 +270,25 @@ private:
 
   /// Helper function for branching to label.
   Expect<void> branchToLabel(Runtime::StackManager &StackMgr,
-                             uint32_t EraseBegin, uint32_t EraseEnd,
-                             int32_t PCOffset,
+                             const AST::Instruction::JumpDescriptor &JumpDesc,
                              AST::InstrView::iterator &PC) noexcept;
+
+  /// Helper function for throwing an exception.
+  Expect<void> throwException(Runtime::StackManager &StackMgr,
+                              Runtime::Instance::TagInstance &TagInst,
+                              AST::InstrView::iterator &PC) noexcept;
   /// @}
 
-  /// \name Helper Functions for getting instances.
+  /// \name Helper Functions for getting instances or types.
   /// @{
+  /// Helper function for get defined type by index.
+  const AST::SubType *getDefTypeByIdx(Runtime::StackManager &StackMgr,
+                                      const uint32_t Idx) const;
+
+  /// Helper function for get function instance by index.
+  Runtime::Instance::FunctionInstance *
+  getFuncInstByIdx(Runtime::StackManager &StackMgr, const uint32_t Idx) const;
+
   /// Helper function for get table instance by index.
   Runtime::Instance::TableInstance *
   getTabInstByIdx(Runtime::StackManager &StackMgr, const uint32_t Idx) const;
@@ -279,6 +296,10 @@ private:
   /// Helper function for get memory instance by index.
   Runtime::Instance::MemoryInstance *
   getMemInstByIdx(Runtime::StackManager &StackMgr, const uint32_t Idx) const;
+
+  /// Helper function for get tag instance by index.
+  Runtime::Instance::TagInstance *
+  getTagInstByIdx(Runtime::StackManager &StackMgr, const uint32_t Idx) const;
 
   /// Helper function for get global instance by index.
   Runtime::Instance::GlobalInstance *
@@ -291,6 +312,13 @@ private:
   /// Helper function for get data instance by index.
   Runtime::Instance::DataInstance *
   getDataInstByIdx(Runtime::StackManager &StackMgr, const uint32_t Idx) const;
+
+  /// Helper function for converting into bottom abstract heap type.
+  TypeCode toBottomType(Runtime::StackManager &StackMgr,
+                        const ValType &Type) const;
+
+  /// Helper function for clean the unused bits of numeric values in ValVariant.
+  void cleanNumericVal(ValVariant &Val, const ValType &Type) const noexcept;
   /// @}
 
   /// \name Run instructions functions
@@ -299,25 +327,48 @@ private:
   Expect<void> runIfElseOp(Runtime::StackManager &StackMgr,
                            const AST::Instruction &Instr,
                            AST::InstrView::iterator &PC) noexcept;
+  Expect<void> runThrowOp(Runtime::StackManager &StackMgr,
+                          const AST::Instruction &Instr,
+                          AST::InstrView::iterator &PC) noexcept;
+  Expect<void> runThrowRefOp(Runtime::StackManager &StackMgr,
+                             const AST::Instruction &Instr,
+                             AST::InstrView::iterator &PC) noexcept;
   Expect<void> runBrOp(Runtime::StackManager &StackMgr,
                        const AST::Instruction &Instr,
                        AST::InstrView::iterator &PC) noexcept;
   Expect<void> runBrIfOp(Runtime::StackManager &StackMgr,
                          const AST::Instruction &Instr,
                          AST::InstrView::iterator &PC) noexcept;
+  Expect<void> runBrOnNullOp(Runtime::StackManager &StackMgr,
+                             const AST::Instruction &Instr,
+                             AST::InstrView::iterator &PC) noexcept;
+  Expect<void> runBrOnNonNullOp(Runtime::StackManager &StackMgr,
+                                const AST::Instruction &Instr,
+                                AST::InstrView::iterator &PC) noexcept;
   Expect<void> runBrTableOp(Runtime::StackManager &StackMgr,
                             const AST::Instruction &Instr,
                             AST::InstrView::iterator &PC) noexcept;
+  Expect<void> runBrOnCastOp(Runtime::StackManager &StackMgr,
+                             const AST::Instruction &Instr,
+                             AST::InstrView::iterator &PC,
+                             bool IsReverse = false) noexcept;
   Expect<void> runReturnOp(Runtime::StackManager &StackMgr,
                            AST::InstrView::iterator &PC) noexcept;
   Expect<void> runCallOp(Runtime::StackManager &StackMgr,
                          const AST::Instruction &Instr,
                          AST::InstrView::iterator &PC,
                          bool IsTailCall = false) noexcept;
+  Expect<void> runCallRefOp(Runtime::StackManager &StackMgr,
+                            const AST::Instruction &Instr,
+                            AST::InstrView::iterator &PC,
+                            bool IsTailCall = false) noexcept;
   Expect<void> runCallIndirectOp(Runtime::StackManager &StackMgr,
                                  const AST::Instruction &Instr,
                                  AST::InstrView::iterator &PC,
                                  bool IsTailCall = false) noexcept;
+  Expect<void> runTryTableOp(Runtime::StackManager &StackMgr,
+                             const AST::Instruction &Instr,
+                             AST::InstrView::iterator &PC) noexcept;
   /// ======= Variable instructions =======
   Expect<void> runLocalGetOp(Runtime::StackManager &StackMgr,
                              uint32_t StackOffset) const noexcept;
@@ -329,6 +380,76 @@ private:
                               uint32_t Idx) const noexcept;
   Expect<void> runGlobalSetOp(Runtime::StackManager &StackMgr,
                               uint32_t Idx) const noexcept;
+  /// ======= Reference instructions =======
+  Expect<void> runRefNullOp(Runtime::StackManager &StackMgr,
+                            const ValType &Type) const noexcept;
+  Expect<void> runRefIsNullOp(ValVariant &Val) const noexcept;
+  Expect<void> runRefFuncOp(Runtime::StackManager &StackMgr,
+                            uint32_t Idx) const noexcept;
+  Expect<void> runRefEqOp(ValVariant &Val1,
+                          const ValVariant &Val2) const noexcept;
+  Expect<void> runRefAsNonNullOp(RefVariant &Val,
+                                 const AST::Instruction &Instr) const noexcept;
+  Expect<void> runStructNewOp(Runtime::StackManager &StackMgr,
+                              const uint32_t DefIndex,
+                              bool IsDefault = false) const noexcept;
+  Expect<void> runStructGetOp(ValVariant &Val, const uint32_t Idx,
+                              const AST::CompositeType &CompType,
+                              const AST::Instruction &Instr,
+                              bool IsSigned = false) const noexcept;
+  Expect<void> runStructSetOp(const ValVariant &Val, const RefVariant &InstRef,
+                              const AST::CompositeType &CompType, uint32_t Idx,
+                              const AST::Instruction &Instr) const noexcept;
+  Expect<void> runArrayNewOp(Runtime::StackManager &StackMgr,
+                             const uint32_t DefIndex, uint32_t InitCnt,
+                             uint32_t ValCnt) const noexcept;
+  Expect<void>
+  runArrayNewDataOp(Runtime::StackManager &StackMgr,
+                    const Runtime::Instance::DataInstance &DataInst,
+                    const AST::Instruction &Instr) const noexcept;
+  Expect<void>
+  runArrayNewElemOp(Runtime::StackManager &StackMgr,
+                    const Runtime::Instance::ElementInstance &ElemInst,
+                    const AST::Instruction &Instr) const noexcept;
+  Expect<void> runArraySetOp(const ValVariant &Val, const uint32_t Idx,
+                             const RefVariant &InstRef,
+                             const AST::CompositeType &CompType,
+                             const AST::Instruction &Instr) const noexcept;
+  Expect<void> runArrayGetOp(ValVariant &Val, const uint32_t Idx,
+                             const AST::CompositeType &CompType,
+                             const AST::Instruction &Instr,
+                             bool IsSigned = false) const noexcept;
+  Expect<void> runArrayLenOp(ValVariant &Val,
+                             const AST::Instruction &Instr) const noexcept;
+  Expect<void> runArrayFillOp(uint32_t N, const ValVariant &Val, uint32_t D,
+                              const RefVariant &InstRef,
+                              const AST::CompositeType &CompType,
+                              const AST::Instruction &Instr) const noexcept;
+  Expect<void> runArrayCopyOp(uint32_t N, uint32_t S,
+                              const RefVariant &SrcInstRef, uint32_t D,
+                              const RefVariant &DstInstRef,
+                              const AST::CompositeType &SrcCompType,
+                              const AST::CompositeType &DstCompType,
+                              const AST::Instruction &Instr) const noexcept;
+  Expect<void>
+  runArrayInitDataOp(uint32_t N, uint32_t S, uint32_t D,
+                     const RefVariant &InstRef,
+                     const AST::CompositeType &CompType,
+                     const Runtime::Instance::DataInstance &DataInst,
+                     const AST::Instruction &Instr) const noexcept;
+  Expect<void>
+  runArrayInitElemOp(uint32_t N, uint32_t S, uint32_t D,
+                     const RefVariant &InstRef,
+                     const AST::CompositeType &CompType,
+                     const Runtime::Instance::ElementInstance &ElemInst,
+                     const AST::Instruction &Instr) const noexcept;
+  Expect<void> runRefTestOp(const Runtime::Instance::ModuleInstance *ModInst,
+                            ValVariant &Val, const AST::Instruction &Instr,
+                            bool IsCast = false) const noexcept;
+  Expect<void> runRefConvOp(RefVariant &Val, TypeCode TCode) const noexcept;
+  Expect<void> runRefI31Op(ValVariant &Val) const noexcept;
+  Expect<void> runI31GetOp(ValVariant &Val, const AST::Instruction &Instr,
+                           bool IsSigned = false) const noexcept;
   /// ======= Table instructions =======
   Expect<void> runTableGetOp(Runtime::StackManager &StackMgr,
                              Runtime::Instance::TableInstance &TabInst,
@@ -612,7 +733,6 @@ public:
                             const uint32_t TableIdx, const uint32_t FuncTypeIdx,
                             const uint32_t FuncIdx, const ValVariant *Args,
                             ValVariant *Rets) noexcept;
-
   Expect<uint32_t> memGrow(Runtime::StackManager &StackMgr,
                            const uint32_t MemIdx,
                            const uint32_t NewSize) noexcept;
@@ -630,7 +750,6 @@ public:
                        const uint32_t SrcOff, const uint32_t Len) noexcept;
   Expect<void> dataDrop(Runtime::StackManager &StackMgr,
                         const uint32_t DataIdx) noexcept;
-
   Expect<RefVariant> tableGet(Runtime::StackManager &StackMgr,
                               const uint32_t TableIdx,
                               const uint32_t Off) noexcept;
@@ -657,9 +776,10 @@ public:
                         const uint32_t ElemIdx) noexcept;
   Expect<RefVariant> refFunc(Runtime::StackManager &StackMgr,
                              const uint32_t FuncIdx) noexcept;
-  Expect<void *> ptrFunc(Runtime::StackManager &StackMgr,
-                         const uint32_t TableIdx, const uint32_t FuncTypeIdx,
-                         const uint32_t FuncIdx) noexcept;
+  Expect<void *> tableGetFuncSymbol(Runtime::StackManager &StackMgr,
+                                    const uint32_t TableIdx,
+                                    const uint32_t FuncTypeIdx,
+                                    const uint32_t FuncIdx) noexcept;
   Expect<uint32_t> memoryAtomicNotify(Runtime::StackManager &StackMgr,
                                       const uint32_t MemIdx,
                                       const uint32_t Offset,
@@ -668,11 +788,15 @@ public:
   memoryAtomicWait(Runtime::StackManager &StackMgr, const uint32_t MemIdx,
                    const uint32_t Offset, const uint64_t Expected,
                    const int64_t Timeout, const uint32_t BitWidth) noexcept;
+  Expect<void> callRef(Runtime::StackManager &StackMgr, const RefVariant Ref,
+                       const ValVariant *Args, ValVariant *Rets) noexcept;
+  Expect<void *> refGetFuncSymbol(Runtime::StackManager &StackMgr,
+                                  const RefVariant Ref) noexcept;
 
   template <typename FuncPtr> struct ProxyHelper;
 
   /// Callbacks for compiled modules
-  static const AST::Module::IntrinsicsTable Intrinsics;
+  static const Executable::IntrinsicsTable Intrinsics;
 
 private:
   template <typename T>

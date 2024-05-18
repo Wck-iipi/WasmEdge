@@ -7,7 +7,7 @@ message(STATUS "Downloading the WASM spec test suite")
 FetchContent_Declare(
   wasmedge_unit_test
   GIT_REPOSITORY https://github.com/second-state/WasmEdge-unittest
-  GIT_TAG        wasm-dev-0.13.0
+  GIT_TAG        wasm-dev-0.14.0
 )
 FetchContent_MakeAvailable(wasmedge_unit_test)
 message(STATUS "Downloading the WASM spec test suite -- done")
@@ -26,15 +26,7 @@ else()
 
   if(MSVC)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-      get_property(
-        compile_options
-        DIRECTORY
-        PROPERTY COMPILE_OPTIONS
-        )
-      set_property(
-        DIRECTORY
-        APPEND
-        PROPERTY COMPILE_OPTIONS
+      add_compile_options(
         -Wno-undef
         -Wno-suggest-override
         -Wno-documentation
@@ -50,23 +42,17 @@ else()
         -Wno-format-nonliteral
         -Wno-unused-exception-parameter
         -Wno-unused-member-function
-        )
-      unset(compile_options)
+        -Wno-missing-prototypes
+      )
     elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-      set_property(
-        DIRECTORY
-        APPEND
-        PROPERTY COMPILE_OPTIONS
+      add_compile_options(
         /wd4100 # unreferenced formal parameter
-        )
+        /wd4505 # unreferenced local function has been removed
+      )
     endif()
   endif()
 
   FetchContent_MakeAvailable(simdjson)
-
-  set(SIMDJSON_JUST_LIBRARY ON CACHE INTERNAL "")
-  set(SIMDJSON_BUILD_STATIC ON CACHE INTERNAL "")
-
   message(STATUS "Downloading SIMDJSON source -- done")
 endif()
 
@@ -80,7 +66,7 @@ function(wasmedge_copy_spec_testsuite proposal)
   message(STATUS "Copying test suite to ${CMAKE_CURRENT_BINARY_DIR}/testSuites/${proposal} -- done")
 endfunction()
 
-foreach(PROPOSAL core multi-memory tail-call extended-const threads)
+foreach(PROPOSAL core multi-memory tail-call extended-const threads function-references gc exception-handling exception-handling-legacy)
   wasmedge_copy_spec_testsuite(${PROPOSAL})
 endforeach()
 
@@ -90,7 +76,7 @@ wasmedge_add_library(wasmedgeTestSpec
 
 target_link_libraries(wasmedgeTestSpec
   PRIVATE
-  simdjson
+  simdjson::simdjson
   PUBLIC
   std::filesystem
   wasmedgeCommon

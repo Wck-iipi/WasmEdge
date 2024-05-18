@@ -18,7 +18,7 @@ endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
   list(APPEND WASMEDGE_CFLAGS
-    /std:c++17
+    /utf-8
     /WX
     /W4
     /we5030 # treat unknown attribute as error
@@ -35,9 +35,14 @@ else()
   list(APPEND WASMEDGE_CFLAGS
     -Wall
     -Wextra
-    -Werror
-    -Wno-error=pedantic
   )
+
+  if(NOT WASMEDGE_PLUGIN_WASI_NN_GGML_LLAMA_CUBLAS)
+    list(APPEND WASMEDGE_CFLAGS
+      -Werror
+      -Wno-error=pedantic
+    )
+  endif()
 
   if(WASMEDGE_ENABLE_UB_SANITIZER)
     list(APPEND WASMEDGE_CFLAGS -fsanitize=undefined)
@@ -59,6 +64,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     -Wno-documentation-unknown-command
     -Wno-error=nested-anon-types
     -Wno-error=old-style-cast
+    -Wno-error=shadow
     -Wno-error=unused-command-line-argument
     -Wno-error=unknown-warning-option
     -Wno-ctad-maybe-unsupported
@@ -71,6 +77,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     -Wno-switch-enum
     -Wno-undefined-func-template
   )
+
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 17.0.0)
+    list(APPEND WASMEDGE_CFLAGS
+      -Wno-deprecated-literal-operator
+    )
+  endif()
+
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 18.0.0)
+    list(APPEND WASMEDGE_CFLAGS
+      -Wno-switch-default
+    )
+  endif()
+
   if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13.0.0)
     list(APPEND WASMEDGE_CFLAGS
       -Wno-error=return-std-move-in-c++11
@@ -81,13 +100,23 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
       -Wno-reserved-identifier
     )
   endif()
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 13)
+    list(APPEND WASMEDGE_CFLAGS
+      -Wno-error=dangling-reference
+    )
+  endif()
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 14)
+    list(APPEND WASMEDGE_CFLAGS
+      -Wno-error=template-id-cdtor
+    )
+  endif()
 endif()
 
 if(WIN32)
   add_definitions(-D_CRT_SECURE_NO_WARNINGS -D_ENABLE_EXTENDED_ALIGNED_STORAGE -DNOMINMAX -D_ITERATOR_DEBUG_LEVEL=0)
-  if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     list(APPEND WASMEDGE_CFLAGS
-      "/EHa"
       -Wno-c++98-compat
       -Wno-c++98-compat-pedantic
       -Wno-exit-time-destructors
@@ -111,7 +140,7 @@ function(wasmedge_setup_target target)
   set_target_properties(${target} PROPERTIES
     CXX_STANDARD 17
     CXX_EXTENSIONS OFF
-    CXX_VISIBILITY_PRESET hidden
+    #    CXX_VISIBILITY_PRESET hidden
     ENABLE_EXPORTS ON
     POSITION_INDEPENDENT_CODE ON
     VISIBILITY_INLINES_HIDDEN ON
@@ -127,7 +156,8 @@ function(wasmedge_setup_target target)
   endif()
   target_compile_options(${target}
     PRIVATE
-    ${WASMEDGE_CFLAGS}
+    $<$<COMPILE_LANGUAGE:C>:${WASMEDGE_CFLAGS}>
+    $<$<COMPILE_LANGUAGE:CXX>:${WASMEDGE_CFLAGS}>
   )
 
   if(WASMEDGE_ENABLE_UB_SANITIZER)
@@ -140,7 +170,8 @@ function(wasmedge_setup_target target)
   if(WASMEDGE_BUILD_FUZZING AND NOT DEFINED LIB_FUZZING_ENGINE)
     target_compile_options(${target}
       PUBLIC
-      -fsanitize=fuzzer,address
+      $<$<COMPILE_LANGUAGE:C>:-fsanitize=fuzzer,address>
+      $<$<COMPILE_LANGUAGE:CXX>:-fsanitize=fuzzer,address>
     )
     target_link_options(${target}
       PUBLIC
@@ -152,6 +183,13 @@ endfunction()
 function(wasmedge_add_library target)
   add_library(${target} ${ARGN})
   wasmedge_setup_target(${target})
+  # Linux needs an explicit INSTALL_RPATH to allow libwasmedge.so to find libwasiNNRPC.so
+  # in the same directory
+  if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+    set_target_properties(${target} PROPERTIES
+      INSTALL_RPATH "$ORIGIN"
+    )
+  endif()
 endfunction()
 
 function(wasmedge_add_executable target)
@@ -170,12 +208,12 @@ function(wasmedge_add_executable target)
 endfunction()
 
 # Generate the list of static libs to statically link LLVM.
-if((WASMEDGE_LINK_LLVM_STATIC OR WASMEDGE_BUILD_STATIC_LIB) AND WASMEDGE_BUILD_AOT_RUNTIME)
+if((WASMEDGE_LINK_LLVM_STATIC OR WASMEDGE_BUILD_STATIC_LIB) AND WASMEDGE_USE_LLVM)
   # Pack the LLVM and lld static libraries.
   find_package(LLVM REQUIRED HINTS "${LLVM_CMAKE_PATH}")
   execute_process(
     COMMAND ${LLVM_BINARY_DIR}/bin/llvm-config --libs --link-static
-    core lto native nativecodegen option passes support transformutils all-targets
+    core lto native nativecodegen option passes support orcjit transformutils all-targets
     OUTPUT_VARIABLE WASMEDGE_LLVM_LINK_LIBS_NAME
   )
   string(REPLACE "-l" "" WASMEDGE_LLVM_LINK_LIBS_NAME "${WASMEDGE_LLVM_LINK_LIBS_NAME}")
@@ -209,7 +247,7 @@ if((WASMEDGE_LINK_LLVM_STATIC OR WASMEDGE_BUILD_STATIC_LIB) AND WASMEDGE_BUILD_A
       ${LLVM_LIBRARY_DIR}/liblldWasm.a
     )
   endif()
-  if (APPLE AND LLVM_VERSION_MAJOR GREATER_EQUAL 15)
+  if(APPLE AND LLVM_VERSION_MAJOR GREATER_EQUAL 15)
     # For LLVM 15 or greater on MacOS
     find_package(zstd REQUIRED)
     get_filename_component(ZSTD_PATH "${zstd_LIBRARY}" DIRECTORY)

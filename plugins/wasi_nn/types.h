@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #pragma once
-#include "common/log.h"
 #include "common/span.h"
+#include "common/spdlog.h"
 #include <cstdint>
 
 namespace WasmEdge::Host::WASINN {
@@ -18,11 +18,15 @@ enum class ErrNo : uint32_t {
   UnsupportedOperation = 6, // Unsupported Operation.
   TooLarge = 7,             // Too Large.
   NotFound = 8,             // Not Found.
+  EndOfSequence = 100,      // End of Sequence Found.
+  ContextFull = 101,        // Context Full.
+  PromptTooLong = 102,      // Prompt Too Long.
+  ModelNotFound = 103,      // Model Not Found.
 };
 
 enum class TensorType : uint8_t { F16 = 0, F32 = 1, U8 = 2, I32 = 3 };
 
-enum class Device : uint32_t { CPU = 0, GPU = 1, TPU = 2 };
+enum class Device : uint32_t { CPU = 0, GPU = 1, TPU = 2, AUTO = 3 };
 
 enum class Backend : uint8_t {
   OpenVINO = 0,

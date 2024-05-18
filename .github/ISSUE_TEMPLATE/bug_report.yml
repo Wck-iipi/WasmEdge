@@ -37,7 +37,6 @@ body:
         2. Execute with flags '....'
         3. Execute with inputs '....'
         4. Get error
-      render: bash
     validations:
       required: true
   - type: textarea
@@ -47,7 +46,6 @@ body:
       description: If applicable, add screenshots to help explain your problem.
       value: |
         ![DESCRIPTION](LINK.png)
-      render: bash
     validations:
       required: false
   - type: textarea
@@ -55,7 +53,6 @@ body:
     attributes:
       label: "Any logs you want to share for showing the specific issue"
       description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
-      render: bash
     validations:
       required: false
   - type: dropdown
@@ -103,6 +100,6 @@ body:
       placeholder: |
         - C++ Compiler version:
         - CMake version:
-        - CMake flags: (e.g. `-DCMAKE_BUILD_TYPE=Release -DWASMEDGE_BUILD_AOT_RUNTIME=ON`)
+        - CMake flags: (e.g. `-DCMAKE_BUILD_TYPE=Release -DWASMEDGE_USE_LLVM=ON`)
     validations:
       required: false

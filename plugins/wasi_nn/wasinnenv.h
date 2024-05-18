@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "common/log.h"
+#include "common/spdlog.h"
 #include "plugin/plugin.h"
 #include <cstdint>
 #include <functional>
@@ -16,6 +16,11 @@
 #include "tfl.h"
 #include "torch.h"
 #include "types.h"
+
+#ifdef WASMEDGE_BUILD_WASI_NN_RPC
+#include <grpc/grpc.h>
+#include <grpcpp/create_channel.h>
+#endif
 
 namespace WasmEdge {
 namespace Host {
@@ -163,8 +168,20 @@ struct WasiNNEnvironment :
     return false;
   }
 
-  Expect<WASINN::ErrNo> mdBuild(std::string Name, uint32_t &GraphId,
-                                Callback Load) noexcept {
+  void mdRemoveById(uint32_t GraphId) noexcept {
+    std::unique_lock Lock(MdMutex);
+    for (auto It = MdMap.begin(); It != MdMap.end();) {
+      if (It->second == static_cast<uint32_t>(GraphId)) {
+        It = MdMap.erase(It);
+      } else {
+        ++It;
+      }
+    }
+  }
+
+  Expect<WASINN::ErrNo>
+  mdBuild(std::string Name, uint32_t &GraphId, Callback Load,
+          std::vector<uint8_t> Config = std::vector<uint8_t>()) noexcept {
     std::unique_lock Lock(MdMutex);
     auto It = RawMdMap.find(Name);
     if (It != RawMdMap.end()) {
@@ -173,6 +190,10 @@ struct WasiNNEnvironment :
       Builders.reserve(RawMd.size());
       for (auto &Builder : RawMd) {
         Builders.emplace_back(Builder);
+      }
+      // Add config to the end of Builders if exists.
+      if (Config.size() > 0) {
+        Builders.emplace_back(Config);
       }
       auto Result = Load(*this, Builders, std::get<1>(It->second),
                          std::get<2>(It->second), GraphId);
@@ -192,8 +213,10 @@ struct WasiNNEnvironment :
   std::vector<Graph> NNGraph;
   std::vector<Context> NNContext;
   static PO::List<std::string> NNModels;
-
-  static Plugin::PluginRegister Register;
+#ifdef WASMEDGE_BUILD_WASI_NN_RPC
+  static PO::Option<std::string> NNRPCURI; // For RPC client mode
+  std::shared_ptr<grpc::Channel> NNRPCChannel;
+#endif
 };
 
 } // namespace WASINN

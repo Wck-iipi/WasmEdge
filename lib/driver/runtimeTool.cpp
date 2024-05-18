@@ -3,7 +3,7 @@
 
 #include "common/configure.h"
 #include "common/filesystem.h"
-#include "common/log.h"
+#include "common/spdlog.h"
 #include "common/types.h"
 #include "common/version.h"
 #include "driver/tool.h"
@@ -65,11 +65,30 @@ int Tool(struct DriverToolOptions &Opt) noexcept {
   if (Opt.PropThreads.value()) {
     Conf.addProposal(Proposal::Threads);
   }
+  if (Opt.PropFunctionReference.value()) {
+    Conf.addProposal(Proposal::FunctionReferences);
+  }
+  if (Opt.PropGC.value()) {
+    Conf.addProposal(Proposal::GC);
+    spdlog::warn("GC proposal is enabled, this is experimental.");
+  }
+  if (Opt.PropComponent.value()) {
+    Conf.addProposal(Proposal::Component);
+    spdlog::warn("component model is enabled, this is experimental.");
+  }
+  if (Opt.PropExceptionHandling.value()) {
+    Conf.addProposal(Proposal::ExceptionHandling);
+  }
   if (Opt.PropAll.value()) {
     Conf.addProposal(Proposal::MultiMemories);
     Conf.addProposal(Proposal::TailCall);
     Conf.addProposal(Proposal::ExtendedConst);
     Conf.addProposal(Proposal::Threads);
+    Conf.addProposal(Proposal::GC);
+    Conf.addProposal(Proposal::Component);
+    spdlog::warn("GC proposal is enabled, this is experimental.");
+    spdlog::warn("component model is enabled, this is experimental.");
+    Conf.addProposal(Proposal::ExceptionHandling);
   }
 
   std::optional<std::chrono::system_clock::time_point> Timeout;
@@ -100,6 +119,11 @@ int Tool(struct DriverToolOptions &Opt) noexcept {
     if (Opt.ConfEnableTimeMeasuring.value()) {
       Conf.getStatisticsConfigure().setTimeMeasuring(true);
     }
+  }
+  if (Opt.ConfEnableJIT.value()) {
+    Conf.getRuntimeConfigure().setEnableJIT(true);
+    Conf.getCompilerConfigure().setOptimizationLevel(
+        WasmEdge::CompilerConfigure::OptimizationLevel::O1);
   }
   if (Opt.ConfForceInterpreter.value()) {
     Conf.getRuntimeConfigure().setForceInterpreter(true);
@@ -216,31 +240,31 @@ int Tool(struct DriverToolOptions &Opt) noexcept {
     for (size_t I = 0;
          I < FuncType.getParamTypes().size() && I + 1 < Opt.Args.value().size();
          ++I) {
-      switch (FuncType.getParamTypes()[I]) {
-      case ValType::I32: {
+      switch (FuncType.getParamTypes()[I].getCode()) {
+      case TypeCode::I32: {
         const uint32_t Value =
             static_cast<uint32_t>(std::stol(Opt.Args.value()[I + 1]));
         FuncArgs.emplace_back(Value);
-        FuncArgTypes.emplace_back(ValType::I32);
+        FuncArgTypes.emplace_back(TypeCode::I32);
         break;
       }
-      case ValType::I64: {
+      case TypeCode::I64: {
         const uint64_t Value =
             static_cast<uint64_t>(std::stoll(Opt.Args.value()[I + 1]));
         FuncArgs.emplace_back(Value);
-        FuncArgTypes.emplace_back(ValType::I64);
+        FuncArgTypes.emplace_back(TypeCode::I64);
         break;
       }
-      case ValType::F32: {
+      case TypeCode::F32: {
         const float Value = std::stof(Opt.Args.value()[I + 1]);
         FuncArgs.emplace_back(Value);
-        FuncArgTypes.emplace_back(ValType::F32);
+        FuncArgTypes.emplace_back(TypeCode::F32);
         break;
       }
-      case ValType::F64: {
+      case TypeCode::F64: {
         const double Value = std::stod(Opt.Args.value()[I + 1]);
         FuncArgs.emplace_back(Value);
-        FuncArgTypes.emplace_back(ValType::F64);
+        FuncArgTypes.emplace_back(TypeCode::F64);
         break;
       }
       /// TODO: FuncRef and ExternRef
@@ -254,7 +278,7 @@ int Tool(struct DriverToolOptions &Opt) noexcept {
         const uint64_t Value =
             static_cast<uint64_t>(std::stoll(Opt.Args.value()[I]));
         FuncArgs.emplace_back(Value);
-        FuncArgTypes.emplace_back(ValType::I64);
+        FuncArgTypes.emplace_back(TypeCode::I64);
       }
     }
 
@@ -267,20 +291,20 @@ int Tool(struct DriverToolOptions &Opt) noexcept {
     if (auto Result = AsyncResult.get()) {
       /// Print results.
       for (size_t I = 0; I < Result->size(); ++I) {
-        switch ((*Result)[I].second) {
-        case ValType::I32:
+        switch ((*Result)[I].second.getCode()) {
+        case TypeCode::I32:
           std::cout << (*Result)[I].first.get<uint32_t>() << '\n';
           break;
-        case ValType::I64:
+        case TypeCode::I64:
           std::cout << (*Result)[I].first.get<uint64_t>() << '\n';
           break;
-        case ValType::F32:
+        case TypeCode::F32:
           std::cout << (*Result)[I].first.get<float>() << '\n';
           break;
-        case ValType::F64:
+        case TypeCode::F64:
           std::cout << (*Result)[I].first.get<double>() << '\n';
           break;
-        case ValType::V128:
+        case TypeCode::V128:
           std::cout << (*Result)[I].first.get<uint128_t>() << '\n';
           break;
         /// TODO: FuncRef and ExternRef
